@@ -34,9 +34,6 @@ def ban_threadtest_current_thread():
     obj.name = "MainThread"
     return obj
 
-def putim_toweb(im:Image.Image,web:webview.Window,varname:str):
-    web.evaluate_js(f"{varname} = {[j for i in im.getdata() for j in i]};")
-
 webview.threading.current_thread = ban_threadtest_current_thread
 
 class WebCanvas:
@@ -62,6 +59,7 @@ class WebCanvas:
         self._destroyed = False
         self.debug = debug
         self._regims = {}
+        self._is_loadimg = {}
         self._JavaScript_WaitToExecute_CodeArray = []
         threading.Thread(target=webview.start,kwargs={"debug":self.debug},daemon=True).start()
         self._init()
@@ -368,23 +366,16 @@ class WebCanvas:
         threading_:bool = False,
         wait_execute:bool = False
     ):
+        if imgname not in self._is_loadimg:
+            raise ValueError("Image not found.")
+        if not self._is_loadimg[imgname]:
+            self._load_img(imgname)
         code = f"\
-            if (!window.{imgname}_imgele){chr(123)}\
-                {imgname}_imgele = document.createElement('img');\
-                {imgname}_imgele.src = 'http://127.0.0.1:{self._web_port + 1}/{imgname}';\
-                {imgname}_imgele.loading = \"eager\";\
-                {imgname}_imgele_onloadfuncs = new Array();\
-                {imgname}_imgele.onload = function(){chr(123)}\
-                    for (code of {imgname}_imgele_onloadfuncs){chr(123)}\
-                        ctx.drawImage({imgname}_imgele,code[0],code[1],code[2],code[3]);\
-                    {chr(125)}\
-                {chr(125)}\
-            {chr(125)}\
-            if ({imgname}_imgele.complete){chr(123)}\
-                ctx.drawImage({imgname}_imgele,{x},{y},{width},{height});\
+            if ({imgname}_img.complete){chr(123)}\
+                ctx.drawImage({imgname}_img,{x},{y},{width},{height});\
             {chr(125)}\
             else{chr(123)}\
-                {imgname}_imgele_onloadfuncs.push([{x},{y},{width},{height}]);\
+                {imgname}_img_onloadfuncs.push([{x},{y},{width},{height}]);\
             {chr(125)}\
         "
         self.run_js_code(code,threading_,wait_execute)
@@ -410,34 +401,16 @@ class WebCanvas:
         name:str
     ):
         self._regims.update({name:im})
+        self._is_loadimg[name] = False
     
     def load_allimg(
         self
     ):
         for imgname in self._regims:
-            code = f"\
-            if (!window.{imgname}_imgele){chr(123)}\
-                {imgname}_imgele = document.createElement('img');\
-                {imgname}_imgele.src = 'http://127.0.0.1:{self._web_port + 1}/{imgname}';\
-                {imgname}_imgele.loading = \"eager\";\
-                {imgname}_imgele_onloadfuncs = new Array();\
-                {imgname}_imgele.onload = function(){chr(123)}\
-                    for (code of {imgname}_imgele_onloadfuncs){chr(123)}\
-                        ctx.drawImage({imgname}_imgele,code[0],code[1],code[2],code[3]);\
-                    {chr(125)}\
-                {chr(125)}\
-            {chr(125)}\
-            "
-            self.run_js_code(code)
+            self._load_img(imgname)
         while True:
-            load_ok = True
-            for imgname in self._regims:
-                complete:bool = self.run_js_code(f"{imgname}_imgele.complete")
-                if not complete:
-                    load_ok = False
-                    print(f"{imgname} not loaded")
-                    break
-            if load_ok:
+            complete_list:typing.List[bool] = self.run_js_code("["+",".join([f"{item}_img.complete" for item in self._regims])+"]")
+            if list(set(complete_list)) == [True]:
                 break
             time.sleep(0.2)
     
@@ -455,10 +428,34 @@ class WebCanvas:
                 return None
             time.sleep(0.05)
     
+    def shutdown_fileserver(
+        self
+    ):
+        self._file_server.shutdown()
+    
     def _closed_callback(
         self
     ):
         self._destroyed = True
+    
+    def _load_img(
+        self,imgname:str
+    ):
+        code = f"\
+        if (!window.{imgname}_img){chr(123)}\
+            {imgname}_img = document.createElement('img');\
+            {imgname}_img.src = 'http://127.0.0.1:{self._web_port + 1}/{imgname}';\
+            {imgname}_img.loading = \"eager\";\
+            {imgname}_img_onloadfuncs = new Array();\
+            {imgname}_img.onload = function(){chr(123)}\
+                for (code of {imgname}_img_onloadfuncs){chr(123)}\
+                    ctx.drawImage({imgname}_img,code[0],code[1],code[2],code[3]);\
+                {chr(125)}\
+            {chr(125)}\
+        {chr(125)}\
+        "
+        self.run_js_code(code)
+        self._is_loadimg[imgname] = True
 
     def _init(
         self
@@ -475,8 +472,8 @@ class WebCanvas:
         
         self._web_port = int(self._web._server.address.split(":")[2].split("/")[0])
         WebCanvas_FileServerHandler._canvas = self
-        httpd = http.server.HTTPServer(("localhost",self._web_port + 1),WebCanvas_FileServerHandler)
-        threading.Thread(target=lambda:httpd.serve_forever(poll_interval=0.01),daemon=True).start()
+        self._file_server = http.server.HTTPServer(("localhost",self._web_port + 1),WebCanvas_FileServerHandler)
+        threading.Thread(target=lambda:self._file_server.serve_forever(poll_interval=0),daemon=True).start()
         
 if __name__ == "__main__":
     from sys import argv
